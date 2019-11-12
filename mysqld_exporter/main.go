@@ -85,6 +85,17 @@ var scrapers = map[collector.Scraper]bool{
 	collector.ScrapeSlaveHosts{}:                          false,
 }
 
+// landingPage contains the HTML served at '/'.
+// TODO: Make this nicer and more informative.
+var landingPage = []byte(`<html>
+<head><title>MySQLd exporter</title></head>
+<body>
+<h1>MySQLd exporter</h1>
+<p><a href='` + *metricPath + `'>Metrics</a></p>
+</body>
+</html>
+`)
+
 func parseMycnf(config interface{}) (string, error) {
 	var dsn string
 	opts := ini.LoadOptions{
@@ -210,6 +221,21 @@ func newHandler(metrics collector.Metrics, scrapers []collector.Scraper, logger 
 	}
 }
 
+func startServer(scrapers []collector.Scraper, logger log.Logger) {
+
+	handlerFunc := newHandler(collector.NewMetrics(), scrapers, logger)
+	http.Handle(*metricPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(landingPage)
+	})
+
+	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
+	if err := http.ListenAndServe(*listenAddress, nil); err != nil {
+		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
+		os.Exit(1)
+	}
+}
+
 func main() {
 	// Generate ON/OFF flags for all scrapers.
 	scraperFlags := map[collector.Scraper]*bool{}
@@ -235,17 +261,6 @@ func main() {
 	kingpin.Parse()
 	logger := promlog.New(promlogConfig)
 
-	// landingPage contains the HTML served at '/'.
-	// TODO: Make this nicer and more informative.
-	var landingPage = []byte(`<html>
-<head><title>MySQLd exporter</title></head>
-<body>
-<h1>MySQLd exporter</h1>
-<p><a href='` + *metricPath + `'>Metrics</a></p>
-</body>
-</html>
-`)
-
 	level.Info(logger).Log("msg", "Starting msqyld_exporter", "version", version.Info())
 	level.Info(logger).Log("msg", "Build context", version.BuildContext())
 
@@ -266,15 +281,6 @@ func main() {
 			enabledScrapers = append(enabledScrapers, scraper)
 		}
 	}
-	handlerFunc := newHandler(collector.NewMetrics(), enabledScrapers, logger)
-	http.Handle(*metricPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write(landingPage)
-	})
 
-	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
-	if err := http.ListenAndServe(*listenAddress, nil); err != nil {
-		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
-		os.Exit(1)
-	}
+	startServer(enabledScrapers, logger)
 }
